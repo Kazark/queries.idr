@@ -41,17 +41,15 @@ Functor f => Functor (FreeQ n f) where
   map f (PureQ x) = PureQ (f x)
   map f (BindHQ slave) = BindHQ (map (map f) slave)
 
-size : FreeQ n f a -> Nat
-size {n} _ = n
-
 ||| Recover applicative and monad instances by lifting... I mean half the point
 ||| of a free monad is to actually be able to use do notation etc. right?
 record FreeQry (q : Type -> Type) a where
   constructor WrapFHQ
-  unwrapFHQ : FreeQ n (HandledQry q) a
+  size : Nat
+  unwrapFHQ : FreeQ size (HandledQry q) a
 
 Functor (FreeQry q) where
-  map f (WrapFHQ x) = WrapFHQ $ map f x
+  map f (WrapFHQ n x) = WrapFHQ n $ map f x
 
 ||| Applicative apply, except we can't implement the type class because the size
 ||| of our type changes between inputs and output.
@@ -60,8 +58,8 @@ apfq {n=Z} (PureQ y) x = map y x
 apfq (BindHQ y) x = BindHQ (map (flip apfq x) y)
 
 Applicative (FreeQry q) where
-  pure x = WrapFHQ (PureQ x)
-  (WrapFHQ f) <*> (WrapFHQ x) = WrapFHQ $ apfq f x
+  pure x = WrapFHQ Z (PureQ x)
+  (WrapFHQ n f) <*> (WrapFHQ m x) = WrapFHQ (n + m) $ apfq f x
 
 ||| Monad bind, except we can't implement the type class because the size of our
 ||| type changes between inputs and output.
@@ -75,12 +73,12 @@ joinfq : Functor f => FreeQ n f (FreeQ m f a) -> FreeQ (n + m) f a
 joinfq (PureQ x) = x
 joinfq (BindHQ x) = BindHQ (map joinfq x)
 
-linkashorn : FreeQ n (HandledQry q) (FreeQry q a) -> FreeQry q a
-linkashorn (PureQ x) = x
-linkashorn (BindHQ x) = WrapFHQ $ BindHQ $ map (unwrapFHQ . linkashorn) x
+linkashorn : (n : Nat) -> FreeQ n (HandledQry q) (FreeQry q a) -> FreeQry q a
+linkashorn Z (PureQ x) = x
+linkashorn (S m) (BindHQ x) = WrapFHQ (S m) $ BindHQ $ map (unwrapFHQ . linkashorn m) x
 
 Monad (FreeQry q) where
-  join (WrapFHQ x) = linkashorn x
+  join (WrapFHQ n x) = linkashorn n x
 
 ||| Example specific query GADT
 data FSQry : Type -> Type where
