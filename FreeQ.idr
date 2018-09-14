@@ -31,9 +31,56 @@ Functor (HandledQry q) where
 ||| be the future. For now, it would be a tremendous step forward in my F# code
 ||| if I could use this approach!
 data FreeQ : Nat -> (Type -> Type) -> Type -> Type where
-  PureQ : a -> FreeQ Z (HandledQry q) a
-  BindQ : HandledQry q (FreeQ n (HandledQry q) a)
-        -> FreeQ (S n) (HandledQry q) a
+  PureQ : a -> FreeQ Z f a
+  BindHQ : HandledQry q (FreeQ n (HandledQry q) a)
+         -> FreeQ (S n) (HandledQry q) a
+
+||| Thankfully due to the nature of functor, we are ablel to implement the
+||| interface, since it does not change the size of our FreeQ.
+Functor f => Functor (FreeQ n f) where
+  map f (PureQ x) = PureQ (f x)
+  map f (BindHQ slave) = BindHQ (map (map f) slave)
+
+size : FreeQ n f a -> Nat
+size {n} _ = n
+
+||| Recover applicative and monad instances by lifting... I mean half the point
+||| of a free monad is to actually be able to use do notation etc. right?
+record FreeQry (q : Type -> Type) a where
+  constructor WrapFHQ
+  unwrapFHQ : FreeQ n (HandledQry q) a
+
+Functor (FreeQry q) where
+  map f (WrapFHQ x) = WrapFHQ $ map f x
+
+||| Applicative apply, except we can't implement the type class because the size
+||| of our type changes between inputs and output.
+apfq : Functor f => FreeQ n f (a -> b) -> FreeQ m f a -> FreeQ (n + m) f b
+apfq {n=Z} (PureQ y) x = map y x
+apfq (BindHQ y) x = BindHQ (map (flip apfq x) y)
+
+Applicative (FreeQry q) where
+  pure x = WrapFHQ (PureQ x)
+  (WrapFHQ f) <*> (WrapFHQ x) = WrapFHQ $ apfq f x
+
+||| Monad bind, except we can't implement the type class because the size of our
+||| type changes between inputs and output.
+bindfq : Functor f => (a -> FreeQ n f b) -> FreeQ m f a -> FreeQ (m + n) f b
+bindfq {n} {m=Z} f (PureQ x) = f x
+bindfq f (BindHQ x) = BindHQ (map (bindfq f) x)
+
+||| Monad join, except we can't implement the type class because the size of our
+||| type changes between inputs and output.
+joinfq : Functor f => FreeQ n f (FreeQ m f a) -> FreeQ (n + m) f a
+joinfq (PureQ x) = x
+joinfq (BindHQ x) = BindHQ (map joinfq x)
+
+linkashorn : FreeQ n (HandledQry q) (FreeQry q a) -> FreeQry q a
+linkashorn (PureQ x) = x
+linkashorn (BindHQ x) = WrapFHQ $ BindHQ $ map (unwrapFHQ . linkashorn) x
+
+Monad (FreeQry q) where
+  join (WrapFHQ x) = linkashorn x
 
 ||| Example specific query GADT
 data FSQry : Type -> Type where
@@ -49,62 +96,8 @@ data FSCmd
   | DeleteFile String
   | DeleteDir String
 
-||| Thankfully due to the nature of functor, we are ablel to implement the
-||| interface, since it does not change the size of our FreeQ.
-Functor f => Functor (FreeQ n f) where
-  map f (PureQ x) = PureQ (f x)
-  map f (BindQ slave) = BindQ (map (map f) slave)
-
-||| Applicative apply, except we can't implement the type class because the size
-||| of our type changes between inputs and output.
-apfq : Functor f => FreeQ n f (a -> b) -> FreeQ m f a -> FreeQ (n + m) f b
-apfq {n=Z} (PureQ y) x = map y x
-apfq (BindQ y) x = BindQ (map (flip apfq x) y)
-
-||| Monad bind, except we can't implement the type class because the size of our
-||| type changes between inputs and output.
-bindfq : Functor f => (a -> FreeQ n f b) -> FreeQ m f a -> FreeQ (m + n) f b
-bindfq {n} {m=Z} f (PureQ x) = f x
-bindfq f (BindQ x) = BindQ (map (bindfq f) x)
-
-||| Monad join, except we can't implement the type class because the size of our
-||| type changes between inputs and output.
-joinfq : Functor f => FreeQ n f (FreeQ m f a) -> FreeQ (n + m) f a
-joinfq = bindfq id
-
-||| Recover applicative and monad instances by lifting... I mean half the point
-||| of a free monad is to actually be able to use do notation etc. right?
-data FreeQQ : (Type -> Type) -> Type -> Type where
-  LiftFQ : FreeQ n (HandledQry q) a -> FreeQQ q a
-
-size : FreeQ n f a -> Nat
-size {n} _ = n
-
-UnliftFQType : FreeQQ q a -> Type
-UnliftFQType (LiftFQ fq) = FreeQ (size fq) (HandledQry q) a
-
-unliftFQ : (fqq : FreeQQ q a) -> UnliftFQType fqq
-unliftFQ (LiftFQ fq) = fq
-
-Functor (FreeQQ q) where
-  map f (LiftFQ x) = LiftFQ (map f x)
-
-Applicative (FreeQQ q) where
-  pure x = LiftFQ (PureQ x)
-  (LiftFQ f) <*> (LiftFQ x) = LiftFQ $ apfq f x
-
-bindfqq : (a -> FreeQQ q b) -> FreeQQ q a -> FreeQQ q b
-bindfqq f (LiftFQ (PureQ x)) = f x
-bindfqq f (LiftFQ (BindQ x)) =
-  let fqq = map (unliftFQ . bindfqq f . LiftFQ) x
-  in ?qwaa fqq
-  --in LiftFQ $ BindQ $ ?qwaa fqq
-
---Monad (FreeQQ q) where
---  (LiftFQ x) >>= f = LiftFQ $ bindfq (unliftFQ . f) x
---
 --B : Functor f => f (FreeQ f a) -> FreeQ f a
---B x = assert_total $ BindQ x
+--B x = assert_total $ BindHQ x
 --
 --traverse : Functor f => (a -> FreeQ f b) -> List a -> FreeQ f (List b)
 --traverse f [] = pure List.Nil
