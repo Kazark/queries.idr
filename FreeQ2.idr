@@ -1,18 +1,20 @@
-module FreeQ
+module FreeQ2
 
 %default total
 %access public export
 
 ||| Type representing a query type which encodes a query _request_ (presumably a
-||| GADT), paired with a handler for it.
-record HandledQry (q : Type -> Type)  (a : Type) where
+||| GADT), paired with a handler for it. The handler's output type is
+||| parameterized over a size to help smooth out totality proofs when used with
+||| the free query. This makes us loose our functor instance, but we can still
+||| define a concept of map.
+record HandledQry (q : Type -> Type) (n : Nat) (o : Nat -> Type) where
   constructor HandleQry
   qry : q i
-  handle : i -> a
+  handle : i -> o n
 
-||| HandledQry q is a strictly positive functor, regardless of the shape of q!
-Functor (HandledQry q) where
-  map f (HandleQry qry handle) = HandleQry qry (f . handle)
+mapHQ : {n, m : Nat} -> (a n -> b m) -> HandledQry q n a -> HandledQry q m b
+mapHQ f (HandleQry qry handle) = HandleQry qry (f . handle)
 
 ||| Since the standard Haskell-style Free monad is not strictly positive, and I
 ||| do not understand yet how to constrain a functor to be strictly positive;
@@ -31,36 +33,30 @@ Functor (HandledQry q) where
 ||| be the future. For now, it would be a tremendous step forward in my F# code
 ||| if I could use this approach!
 data FreeQ : Nat -> (Type -> Type) -> Type -> Type where
-  PureQ : a -> FreeQ Z f a
-  BindHQ : HandledQry q (FreeQ n (HandledQry q) a)
-         -> FreeQ (S n) (HandledQry q) a
-
-Sized (FreeQ n f a) where
-  size {n} _ = n
+  PureQ : a -> FreeQ Z q a
+  BindHQ : HandledQry q n (\m => FreeQ m q a)
+         -> FreeQ (S n) q a
 
 ||| Thankfully due to the nature of functor, we are ablel to implement the
 ||| interface, since it does not change the size of our FreeQ.
-Functor f => Functor (FreeQ n f) where
+Functor (FreeQ n q) where
   map f (PureQ x) = PureQ (f x)
-  map f (BindHQ slave) = BindHQ (map (map f) slave)
+  map f (BindHQ slave) = BindHQ (mapHQ (map f) slave)
 
 ||| Recover applicative and monad instances by lifting... I mean half the point
 ||| of a free monad is to actually be able to use do notation etc. right?
 record FreeQry (q : Type -> Type) a where
   constructor WrapFHQ
-  unwrapFHQ : FreeQ qsize (HandledQry q) a
-
-Sized (FreeQry q a) where
-  size (WrapFHQ q) = size q
+  unwrapFHQ : FreeQ qsize q a
 
 Functor (FreeQry q) where
   map f (WrapFHQ x) = WrapFHQ $ map f x
 
 ||| Applicative apply, except we can't implement the type class because the size
 ||| of our type changes between inputs and output.
-apfq : Functor f => FreeQ n f (a -> b) -> FreeQ m f a -> FreeQ (n + m) f b
+apfq : FreeQ n f (a -> b) -> FreeQ m f a -> FreeQ (n + m) f b
 apfq {n=Z} (PureQ y) x = map y x
-apfq (BindHQ y) x = BindHQ (map (flip apfq x) y)
+apfq (BindHQ y) x = BindHQ (mapHQ (flip apfq x) y)
 
 Applicative (FreeQry q) where
   pure x = WrapFHQ (PureQ x)
@@ -70,59 +66,19 @@ Applicative (FreeQry q) where
 ||| type changes between inputs and output.
 bindfq : Functor f => (a -> FreeQ n f b) -> FreeQ m f a -> FreeQ (m + n) f b
 bindfq {n} {m=Z} f (PureQ x) = f x
-bindfq f (BindHQ x) = BindHQ (map (bindfq f) x)
+bindfq f (BindHQ x) = BindHQ (mapHQ (bindfq f) x)
 
 ||| Monad join, except we can't implement the type class because the size of our
 ||| type changes between inputs and output.
 joinfq : Functor f => FreeQ n f (FreeQ m f a) -> FreeQ (n + m) f a
 joinfq (PureQ x) = x
-joinfq (BindHQ x) = BindHQ (map joinfq x)
+joinfq (BindHQ x) = BindHQ (mapHQ joinfq x)
 
-join' : FreeQ n (HandledQry q) (FreeQry q a) -> FreeQry q a
-join' {n=Z} (PureQ x) = x
-join' {n=S m} (BindHQ x) =
-  ?asdf $ map join' x
+join' : (n : Nat) -> FreeQ n q (FreeQry q a) -> FreeQry q a
+join' Z (PureQ x) = x
+join' (S m) (BindHQ x) =
+  ?asdf $ map (join' m) x
   --WrapFHQ (S m) $ BindHQ $ map (unwrapFHQ . join' m) x
 
 Monad (FreeQry q) where
-  join (WrapFHQ x) = join' x
-
-||| Example specific query GADT
-data FSQry : Type -> Type where
-  LsFiles : String -> FSQry (List String)
-  ReadText : String -> FSQry String
-  DirExists : String -> FSQry Bool
-
-||| Example accompanying commands, to in conjunction with the FSQry, form a sort
-||| of little filesystem DSL.
-data FSCmd
-  = WriteLines String (List String)
-  | CreateDir String
-  | DeleteFile String
-  | DeleteDir String
-
---B : Functor f => f (FreeQ f a) -> FreeQ f a
---B x = assert_total $ BindHQ x
---
---traverse : Functor f => (a -> FreeQ f b) -> List a -> FreeQ f (List b)
---traverse f [] = pure List.Nil
---traverse f (x::xs) = [| List.(::) (f x) (traverse f xs) |]
---
---liftQry : Qry a -> FreeQ Qry a
---liftQry x = B (map PureQx)
---
---lsFiles : String -> FreeQ Qry (List String)
---lsFiles = liftQry . LsFiles id
---
---readText : String -> FreeQ Qry String
---readText = liftQry . ReadText id
---
---lmap : (a -> b) -> List a -> List b
---lmap f [] = []
---lmap f (x :: xs) = f x :: lmap f xs
---
---consolidate : String -> String -> FreeQ Qry (List Cmd)
---consolidate frum tu = do
---  files <- lsFiles frum
---  texts <- traverse readText files
---  pure $ lmap DeleteFile files ++ [DeleteDir frum, CreateDir tu, WriteLines (tu ++ "/" ++ "consolidated.txt") texts]
+  join (WrapFHQ n x) = join' n x
