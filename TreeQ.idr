@@ -3,8 +3,14 @@ module FreeQ
 %default total
 %access public export
 
-||| A tree structure for combining queries, equal in expressive power to a free
-||| monad but easier to prove total, etc.
+||| A tree structure for combining queries, perhaps slightly less expressive
+||| than a free monad, but easier to prove total, etc. I say less expressive,
+||| because I do not believe it is a monad, whereas my applicative instance
+||| seems pretty solid. Moreover, it has a nice monoid instance, given a monoid
+||| on the type it is parameterized over (but requiring no effort from the query
+||| GADT). I have also provided a generalized semigroup operation based on
+||| pairing items together. This seems promising as something very useful for
+||| DSLs. Now, how do we make use of it in F#?!?
 data QryTree : (Type -> Type) -> Type -> Type where
   ||| Pure for monad/applicative: lift a plain value into the tree
   PureLeaf : a -> QryTree q a
@@ -12,6 +18,18 @@ data QryTree : (Type -> Type) -> Type -> Type where
   LiftLeaf : q i -> (i -> a) -> QryTree q a
   ||| Gives us a monoid operation
   Branch : QryTree q a -> QryTree q b -> ((a, b) -> c) -> QryTree q c
+
+infixr 5 ^+^
+
+||| Generalized semigroup operation
+(^+^) : QryTree q a -> QryTree q b -> QryTree q (a, b)
+q ^+^ r = Branch q r id
+
+Semigroup a => Semigroup (QryTree q a) where
+  q <+> r = Branch q r (uncurry (<+>))
+
+Monoid a => Monoid (QryTree q a) where
+  neutral = PureLeaf neutral
 
 Functor q => Functor (QryTree q) where
   map f (PureLeaf x) = PureLeaf (f x)
@@ -158,5 +176,15 @@ Functor q => Applicative (QryTree q) where
   (Branch q r f) <*> (Branch s t g) =
     Branch (Branch q r id) (Branch s t id) $ s' f g
 
-Functor q => Monad (QryTree q) where
-  x >>= f = ?monads_yikes
+-- How would you implement a monad?
+-- Functor q => Monad (QryTree q) where
+-- The first case would be easy:
+--   (PureLeaf x) >>= f = f x
+-- However, wouldn't you get stuck on these?
+--   (LiftLeaf x g) >>= f = ?monads_yikes_2
+--   (Branch x y g) >>= f = ?monads_yikes_3
+-- It seems that we have insufficient power to smash down the results, since we
+-- cannot actually produce the tree from f in these cases, without introducing
+-- another lambda abstraction: but if we do that, we have to wrap it in a tree:
+-- but then, inside the lambda abstraction, we cannot destroy the tree that we
+-- got out of the f; I take this as a proof that there is no monad instance.
