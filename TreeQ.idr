@@ -9,8 +9,13 @@ module FreeQ
 ||| seems pretty solid. Moreover, it has a nice monoid instance, given a monoid
 ||| on the type it is parameterized over (but requiring no effort from the query
 ||| GADT). I have also provided a generalized semigroup operation based on
-||| pairing items together. This seems promising as something very useful for
-||| DSLs. Now, how do we make use of it in F#?!?
+||| pairing items together. However, regrettable, it does not seem to be
+||| foldable, since some of it's data is based on a future promise and isn't
+||| available yet. This means it is not traversable. However, I think this may
+||| be okay: ultimately the point of traversing is to push the query to the
+||| outside until we're ready to run it, so the traverse instances of list,
+||| maybe and either should serve us well enough, since we just barely make the
+||| minimum requirement (applicative) to play ball with them.
 data QryTree : (Type -> Type) -> Type -> Type where
   ||| Pure for monad/applicative: lift a plain value into the tree
   PureLeaf : a -> QryTree q a
@@ -35,6 +40,14 @@ Functor q => Functor (QryTree q) where
   map f (PureLeaf x) = PureLeaf (f x)
   map f (LiftLeaf q handle) = LiftLeaf q (f . handle)
   map f (Branch q r handle) = Branch q r (f . handle)
+
+-- A foldable instance does not seem possible. You could start easily enough:
+-- Foldable (QryTree q) where
+--   foldr func init (PureLeaf x) = func x init
+-- But where would you go from there?
+--   foldr func init (LiftLeaf x f) = ?foldable_moldable_2
+--   foldr func init (Branch x y f) = ?foldable_moldable_3
+-- The data you have promised right now is stuck in the future...
 
 ||| The s combinator, with a dash of uncurrying
 s' : (a -> (b -> c)) -> (d -> b) -> (a, d) -> c
@@ -188,3 +201,40 @@ Functor q => Applicative (QryTree q) where
 -- another lambda abstraction: but if we do that, we have to wrap it in a tree:
 -- but then, inside the lambda abstraction, we cannot destroy the tree that we
 -- got out of the f; I take this as a proof that there is no monad instance.
+
+||| Example specific query GADT
+data FSQry : Type -> Type where
+  LsFiles : String -> FSQry (List String)
+  ReadText : String -> FSQry String
+  DirExists : String -> FSQry Bool
+
+||| Example accompanying commands, to in conjunction with the FSQry, form a sort
+||| of little filesystem DSL.
+data FSCmd
+  = WriteLines String (List String)
+  | CreateDir String
+  | DeleteFile String
+  | DeleteDir String
+
+--traverse : Functor f => (a -> FreeQ f b) -> List a -> FreeQ f (List b)
+--traverse f [] = pure List.Nil
+--traverse f (x::xs) = [| List.(::) (f x) (traverse f xs) |]
+--
+--liftQry : Qry a -> FreeQ Qry a
+--liftQry x = B (map PureQx)
+--
+--lsFiles : String -> FreeQ Qry (List String)
+--lsFiles = liftQry . LsFiles id
+--
+--readText : String -> FreeQ Qry String
+--readText = liftQry . ReadText id
+--
+--lmap : (a -> b) -> List a -> List b
+--lmap f [] = []
+--lmap f (x :: xs) = f x :: lmap f xs
+--
+--consolidate : String -> String -> FreeQ Qry (List Cmd)
+--consolidate frum tu = do
+--  files <- lsFiles frum
+--  texts <- traverse readText files
+--  pure $ lmap DeleteFile files ++ [DeleteDir frum, CreateDir tu, WriteLines (tu ++ "/" ++ "consolidated.txt") texts]
