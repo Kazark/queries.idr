@@ -26,6 +26,9 @@ data QryTree : (Type -> Type) -> Type -> Type where
 
 infixr 5 ^+^
 
+liftQ : q a -> QryTree q a
+liftQ qry = LiftLeaf qry id
+
 ||| Generalized semigroup operation
 (^+^) : QryTree q a -> QryTree q b -> QryTree q (a, b)
 q ^+^ r = Branch q r id
@@ -216,25 +219,22 @@ data FSCmd
   | DeleteFile String
   | DeleteDir String
 
---traverse : Functor f => (a -> FreeQ f b) -> List a -> FreeQ f (List b)
---traverse f [] = pure List.Nil
---traverse f (x::xs) = [| List.(::) (f x) (traverse f xs) |]
---
---liftQry : Qry a -> FreeQ Qry a
---liftQry x = B (map PureQx)
---
---lsFiles : String -> FreeQ Qry (List String)
---lsFiles = liftQry . LsFiles id
---
---readText : String -> FreeQ Qry String
---readText = liftQry . ReadText id
---
---lmap : (a -> b) -> List a -> List b
---lmap f [] = []
---lmap f (x :: xs) = f x :: lmap f xs
---
---consolidate : String -> String -> FreeQ Qry (List Cmd)
---consolidate frum tu = do
---  files <- lsFiles frum
---  texts <- traverse readText files
---  pure $ lmap DeleteFile files ++ [DeleteDir frum, CreateDir tu, WriteLines (tu ++ "/" ++ "consolidated.txt") texts]
+lsFiles : String -> QryTree FSQry (List String)
+lsFiles = liftQ . LsFiles
+
+readText : String -> QryTree FSQry String
+readText  = liftQ . ReadText
+
+consolidate' : String -> String -> List String -> List String -> List FSCmd
+consolidate' from to files texts =
+  map DeleteFile files
+  ++ [ DeleteDir from
+     , CreateDir to
+     , WriteLines (to ++ "/" ++ "consolidated.txt") texts
+     ]
+
+-- Very sadly, it here appears that our type has insufficient power.
+consolidate : String -> String -> QryTree FSQry (List FSCmd)
+consolidate from to = ?tragedy
+--  (\files => consolidate' from to files <$> traverse readText files)
+--  <*> lsFiles from
