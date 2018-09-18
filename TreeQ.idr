@@ -1,4 +1,4 @@
-module FreeQ
+module TreeQ
 
 %default total
 %access public export
@@ -24,10 +24,10 @@ data QryTree : (Type -> Type) -> Type -> Type where
   ||| Gives us a monoid operation
   Branch : QryTree q a -> QryTree q b -> ((a, b) -> c) -> QryTree q c
 
-infixr 5 ^+^
-
 liftQ : q a -> QryTree q a
 liftQ qry = LiftLeaf qry id
+
+infixr 5 ^+^
 
 ||| Generalized semigroup operation
 (^+^) : QryTree q a -> QryTree q b -> QryTree q (a, b)
@@ -234,7 +234,7 @@ consolidate' from to files texts =
      ]
 
 -- Very sadly, it here appears that our type has insufficient power.
-consolidate : String -> String -> QryTree FSQry (List FSCmd)
+--consolidate : String -> String -> QryTree FSQry (List FSCmd)
 consolidate from to = ?tragedy
 --  (\files => consolidate' from to files <$> traverse readText files)
 --  <*> lsFiles from
